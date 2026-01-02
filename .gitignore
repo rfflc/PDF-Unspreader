@@ -2,6 +2,8 @@
 input.pdf
 output.pdf
 output_vertical.pdf
+repaginated.pdf
+repaginated_vertical_a4.pdf
 
 # macOS
 .DS_Store
