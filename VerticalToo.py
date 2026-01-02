@@ -8,7 +8,7 @@ output_pdf = "output_vertical.pdf"
 STANDARD_DPI = 150
 SCALE = STANDARD_DPI / 72.0  # Convert from PDF points to pixels
 
-def detect_margins_pixmap(pix):
+def detect_margins_pixmap(pix, crop_bottom_aggressive=False, crop_top_aggressive=False):
     """Detect white margins by analyzing pixmap pixels - very aggressive"""
     samples = pix.samples
     width = pix.width
@@ -26,8 +26,8 @@ def detect_margins_pixmap(pix):
         for x in range(width):
             pixel_start = row_start + x * ncomps
             pixel = samples[pixel_start:pixel_start + ncomps]
-            # Very strict: all channels must be > 250 to be considered white
-            if not all(c > 250 for c in pixel):
+            # Extremely strict: all channels must be >= 255 (pure white) to be considered white
+            if not all(c >= 255 for c in pixel):
                 is_row_white = False
                 break
         if not is_row_white:
@@ -39,7 +39,7 @@ def detect_margins_pixmap(pix):
         for y in range(height):
             pixel_start = (y * width + x) * ncomps
             pixel = samples[pixel_start:pixel_start + ncomps]
-            if not all(c > 250 for c in pixel):
+            if not all(c >= 255 for c in pixel):
                 is_col_white = False
                 break
         if not is_col_white:
@@ -48,9 +48,58 @@ def detect_margins_pixmap(pix):
     if len(non_white_rows) == 0 or len(non_white_cols) == 0:
         return None
     
-    # Very aggressive cropping - remove more from top/bottom
-    top = max(0, non_white_rows[0] - 1)
-    bottom = min(height, non_white_rows[-1] + 2)
+    # Check if bottom edge has white pixels - moderate approach
+    bottom_has_white = False
+    if crop_bottom_aggressive and len(non_white_rows) > 0:
+        last_content_row = non_white_rows[-1]
+        # Check only the row immediately after content (very conservative)
+        if last_content_row + 1 < height:
+            y = last_content_row + 1
+            row_start = y * width * ncomps
+            all_white = True
+            # Sample only middle portion to be safer
+            sample_start = width // 4
+            sample_end = 3 * width // 4
+            for x in range(sample_start, sample_end):
+                pixel_start = row_start + x * ncomps
+                pixel = samples[pixel_start:pixel_start + ncomps]
+                if not all(c >= 255 for c in pixel):
+                    all_white = False
+                    break
+            if all_white:
+                bottom_has_white = True
+    
+    # Check if top edge has white pixels - moderate approach
+    top_has_white = False
+    if crop_top_aggressive and len(non_white_rows) > 0:
+        first_content_row = non_white_rows[0]
+        # Check only the row immediately before content (very conservative)
+        if first_content_row > 0:
+            y = first_content_row - 1
+            row_start = y * width * ncomps
+            all_white = True
+            # Sample only middle portion to be safer
+            sample_start = width // 4
+            sample_end = 3 * width // 4
+            for x in range(sample_start, sample_end):
+                pixel_start = row_start + x * ncomps
+                pixel = samples[pixel_start:pixel_start + ncomps]
+                if not all(c >= 255 for c in pixel):
+                    all_white = False
+                    break
+            if all_white:
+                top_has_white = True
+    
+    # Moderate cropping - only crop 1-2 pixels when we detect white, otherwise use small padding
+    if crop_top_aggressive and top_has_white:
+        top = max(0, non_white_rows[0] + 1)  # Crop only 1 pixel when white detected
+    else:
+        top = max(0, non_white_rows[0] - 1)  # Small padding to avoid cutting
+    
+    if crop_bottom_aggressive and bottom_has_white:
+        bottom = min(height, non_white_rows[-1] - 1)  # Crop only 1 pixel when white detected
+    else:
+        bottom = min(height, non_white_rows[-1] + 2)  # Small padding to avoid cutting
     left = max(0, non_white_cols[0] - 1)
     right = min(width, non_white_cols[-1] + 1)
     
@@ -79,9 +128,11 @@ for i in range(0, total_pages, 2):
     pix1 = page1.get_pixmap(matrix=mat)
     pix2 = page2.get_pixmap(matrix=mat) if page2 else None
     
-    # Detect margins
-    margins1 = detect_margins_pixmap(pix1)
-    margins2 = detect_margins_pixmap(pix2) if pix2 else None
+    # Detect margins - crop bottom aggressively for page1 (will join with page2)
+    # Crop top aggressively for page2 (joins with page1)
+    is_last_pair = (i + 1 >= total_pages)
+    margins1 = detect_margins_pixmap(pix1, crop_bottom_aggressive=not is_last_pair, crop_top_aggressive=False)
+    margins2 = detect_margins_pixmap(pix2, crop_bottom_aggressive=False, crop_top_aggressive=True) if pix2 else None
     
     if margins1 is None:
         margins1 = (0, 0, pix1.width, pix1.height)
